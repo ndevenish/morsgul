@@ -1,6 +1,5 @@
-
 use clap::Parser;
-use epicars::{ServerBuilder, providers::IntercomProvider};
+use epicars::{providers::IntercomProvider, ServerBuilder};
 use tokio::select;
 use tracing::level_filters::LevelFilter;
 
@@ -23,11 +22,13 @@ async fn main() {
         .init();
 
     let mut provider = IntercomProvider::new();
-    provider.prefix = "BL24I-JUNGFRAU-META::".to_string();
+    provider.prefix = "BL24I-JUNGFRAU-META:".to_string();
+    provider.rbv = true;
 
     let _pv_path = provider.add_string_pv("FilePath", "", Some(128)).unwrap();
     let _pv_name = provider.add_string_pv("FileName", "", Some(128)).unwrap();
     let _pv_count = provider.add_pv("NumCapture", 0i32).unwrap();
+    let _pv_count_captured = provider.add_pv("NumCaptured", 0i32).unwrap();
 
     let mut server = ServerBuilder::new(provider).start();
 
