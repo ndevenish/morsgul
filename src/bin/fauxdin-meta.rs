@@ -22,7 +22,7 @@ async fn main() {
         .init();
 
     let mut provider = IntercomProvider::new();
-    provider.prefix = "BL24I-JUNGFRAU-META:".to_string();
+    provider.prefix = "BL24I-JUNGFRAU-META:FD:".to_string();
     provider.rbv = true;
 
     let _pv_path = provider.add_string_pv("FilePath", "", Some(128)).unwrap();
