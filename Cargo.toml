@@ -7,4 +7,5 @@ edition = "2024"
 clap = { version = "4.5.47", features = ["derive", "env"] }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
-epicars = { path = "epicars" }
+epicars = { path = "./epicars" }
+tokio = { version = "1.47.1", features = ["full"] }
