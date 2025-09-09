@@ -1,9 +1,8 @@
-use std::time::Duration;
 
 use clap::Parser;
 use epicars::{ServerBuilder, providers::IntercomProvider};
 use tokio::select;
-use tracing::{info, level_filters::LevelFilter};
+use tracing::level_filters::LevelFilter;
 
 #[derive(Parser)]
 struct Options {
@@ -32,15 +31,12 @@ async fn main() {
 
     let mut server = ServerBuilder::new(provider).start();
 
-    loop {
-        select! {
-            _ = server.join() => break,
-            _ = tokio::signal::ctrl_c() => {
-                println!("Ctrl-C: Shutting down");
-                break;
-            },
-        };
-    }
+    select! {
+        _ = server.join() => {},
+        _ = tokio::signal::ctrl_c() => {
+            println!("Ctrl-C: Shutting down");
+        },
+    };
     // Wait for shutdown, unless another ctrl-c
     select! {
         _ = server.stop() => (),

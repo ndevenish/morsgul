@@ -33,7 +33,7 @@ fn parse_zmq_address_and_port(value: &str) -> Result<(String, u16), String> {
     };
     let (left, right) = value.split_at(idx);
     let Ok(port) = right[1..].parse::<u16>() else {
-        return Err(format!("Could not parse port '{}' as number", right));
+        return Err(format!("Could not parse port '{right}' as number"));
     };
     Ok((left.to_string(), port))
 }
