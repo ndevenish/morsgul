@@ -1,16 +1,11 @@
-use std::{
-    net::{SocketAddr, ToSocketAddrs},
-    num::NonZeroU16,
-    path::PathBuf,
-    process::exit,
-};
+use std::num::NonZeroU16;
 
 use clap::Parser;
-use tracing::{error, level_filters::LevelFilter};
+use tracing::level_filters::LevelFilter;
 
-const DEFAULT_PATH_PV: &str = "BL24I-EA-EIGER-01:OD:FilePath_RBV";
-const DEFAULT_NAME_PV: &str = "BL24I-EA-EIGER-01:OD:FP:FileName_RBV";
-const DEFAULT_COUNT_PV: &str = "BL24I-EA-EIGER-01:OD:NumCapture";
+// const DEFAULT_PATH_PV: &str = "BL24I-EA-EIGER-01:OD:FilePath_RBV";
+// const DEFAULT_NAME_PV: &str = "BL24I-EA-EIGER-01:OD:FP:FileName_RBV";
+// const DEFAULT_COUNT_PV: &str = "BL24I-EA-EIGER-01:OD:NumCapture";
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -22,15 +17,8 @@ struct Args {
     /// Show various levels of debug output
     #[clap(short, action = clap::ArgAction::Count)]
     verbose: u8,
-    /// PV for path where images will be written
-    #[clap(long, env = "MORGUL_PV_PATH", default_value = DEFAULT_PATH_PV)]
-    pv_path: PathBuf,
-    /// PV for the filename prefix to write images with
-    #[clap(long, env = "MORGUL_PV_FILENAME", default_value = DEFAULT_NAME_PV)]
-    pv_filename: String,
-    /// PV to get the expected number of images
-    #[clap(long, env = "MORGUL_PV_COUNT", default_value = DEFAULT_COUNT_PV)]
-    pv_image_count: String,
+    /// Prefix for PV exposed via epics
+    pv_prefix: String,
 }
 
 /// Parse a ZeroMQ connection string into address, port parts
