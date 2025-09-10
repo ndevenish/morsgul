@@ -30,6 +30,7 @@ async fn main() {
     let _pv_count = provider.add_pv("NumCapture", 0i32).unwrap();
     let _pv_count_captured = provider.add_pv("NumCaptured", 0i32).unwrap();
     let _pv_subfolder = provider.add_pv("Subfolder", 0i8).unwrap();
+    let _pv_ready = provider.add_pv("Ready", 0i8).unwrap();
 
     let mut server = ServerBuilder::new(provider).start();
 
