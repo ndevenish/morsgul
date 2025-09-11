@@ -167,6 +167,7 @@ version = "0.2.0"
 dependencies = [
  "nom",
  "num",
+ "num-traits",
  "pnet",
  "socket2 0.5.10",
  "thiserror",
