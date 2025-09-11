@@ -22,15 +22,15 @@ async fn main() {
         .init();
 
     let mut provider = IntercomProvider::new();
-    provider.prefix = "BL24I-JUNGFRAU-META:FD:".to_string();
+    //provider.prefix = "BL24I-JUNGFRAU-META:FD:".to_string();
     provider.rbv = true;
 
-    let _pv_path = provider.add_string_pv("FilePath", "", Some(128)).unwrap();
-    let _pv_name = provider.add_string_pv("FileName", "", Some(128)).unwrap();
-    let _pv_count = provider.add_pv("NumCapture", 0i32).unwrap();
-    let _pv_count_captured = provider.add_pv("NumCaptured", 0i32).unwrap();
-    let _pv_subfolder = provider.add_pv("Subfolder", 0i8).unwrap();
-    let _pv_ready = provider.add_pv("Ready", 0i8).unwrap();
+    let _pv_path = provider.add_string_pv("BL24I-JUNGFRAU-META:FD:FilePath", "", Some(128)).unwrap();
+    let _pv_name = provider.add_string_pv("BL24I-JUNGFRAU-META:FD:FileName", "", Some(128)).unwrap();
+    let _pv_count = provider.add_pv("BL24I-JUNGFRAU-META:FD:NumCapture", 0i32).unwrap();
+    let _pv_count_captured = provider.add_pv("BL24I-JUNGFRAU-META:FD:NumCaptured", 0i32).unwrap();
+    let _pv_subfolder = provider.add_pv("BL24I-JUNGFRAU-META:FD:Subfolder", 0i8).unwrap();
+    let _pv_ready = provider.add_pv("BL24I-JUNGFRAU-META:FD:Ready", 0i8).unwrap();
 
     let mut server = ServerBuilder::new(provider).start();
 
