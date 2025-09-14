@@ -334,12 +334,12 @@ fn main() {
                 } => {
                     count_ready = 0;
                     expected_frames = expected_frames_update;
-                    println!(
+                    info!(
                         "Started acquisition {}, expect {} images",
                         acquisition.to_string().bright_cyan(),
                         expected_frames.to_string().bright_cyan()
                     );
-                    println!(
+                    info!(
                         "Writing to data files {}",
                         shared_state
                             .pv
@@ -373,7 +373,7 @@ fn main() {
                     count_ready += 1;
                     if count_ready == opts.listeners.get() {
                         // Collection completely finished, do any global post here
-                        println!("Collection complete");
+                        info!("Collection complete");
                         bulk_state = BulkStates::Ready;
                     }
                 }
@@ -426,7 +426,7 @@ impl HDF5Writer {
     fn write_frame(&mut self, index: usize, data: &[u8]) {}
 }
 
-#[tracing::instrument(name = "listener", skip(shared, connection_str))]
+#[tracing::instrument(name = "listener", skip(shared, connection_str, is_first))]
 fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is_first: bool) {
     debug!("Starting port {port}");
     let context = zmq::Context::new();
