@@ -1,6 +1,6 @@
 #![deny(clippy::indexing_slicing)]
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 
 use clap::Parser;
 use colored::Colorize;
@@ -116,7 +116,7 @@ async fn watch_lifecycle(mut recv: tokio::sync::broadcast::Receiver<ServerEvent>
             } => {
                 channel_names
                     .entry(circuit_id)
-                    .or_insert_with(|| HashMap::new())
+                    .or_insert_with(HashMap::new)
                     .insert(channel_id, channel_name);
             }
             ServerEvent::ClearChannel {
