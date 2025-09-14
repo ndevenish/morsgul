@@ -1,5 +1,6 @@
 use core::num;
 use std::{
+    collections::HashMap,
     num::NonZeroU16,
     panic::{self, UnwindSafe},
     path::PathBuf,
@@ -8,13 +9,19 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 use clap::Parser;
 use colored::Colorize;
-use epicars::providers::intercom::StringIntercom;
+use epicars::{
+    Server, ServerEvent,
+    providers::intercom::{Intercom, StringIntercom},
+};
 use epicars::{ServerBuilder, ServerHandle, providers::IntercomProvider};
+use morsgul::utils::watch_lifecycle;
 use time::macros::format_description;
+use tokio::{runtime::Runtime, sync::broadcast::error::RecvError};
 use tracing::{debug, info, level_filters::LevelFilter};
 use tracing_subscriber::fmt::time::LocalTime;
 
@@ -62,15 +69,87 @@ struct SharedState {
     barrier: Arc<Barrier>,
     cancelled: Arc<AtomicBool>,
     // condition_mutex: Arc<Mutex<bool>>,
+    pv: SharedPV,
 }
 impl SharedState {
-    fn new(num_listeners: NonZeroU16) -> Self {
+    fn new(num_listeners: NonZeroU16, pv: SharedPV) -> Self {
         SharedState {
             barrier: Arc::new(Barrier::new(num_listeners.get() as usize)),
             cancelled: Arc::new(AtomicBool::new(false)),
             // condition_mutex: Arc::new(Mutex::new(false)),
+            pv,
         }
     }
+}
+
+// let mut provider = IntercomProvider::new();
+// //provider.prefix = "BL24I-JUNGFRAU-META:FD:".to_string();
+// provider.rbv = true;
+
+// let _pv_count = provider
+//     .add_pv("BL24I-JUNGFRAU-META:FD:NumCapture", 0i32)
+//     .unwrap();
+// let _pv_count_captured = provider
+//     .add_pv("BL24I-JUNGFRAU-META:FD:NumCaptured", 0i32)
+//     .unwrap();
+// let _pv_subfolder = provider
+//     .add_pv("BL24I-JUNGFRAU-META:FD:Subfolder", 0i8)
+//     .unwrap();
+// let _pv_ready = provider
+//     .add_pv("BL24I-JUNGFRAU-META:FD:Ready", 0i8)
+//     .unwrap();
+/// Holds PV accessors for threads to get shared info from
+#[derive(Clone, Debug)]
+struct SharedPV {
+    filepath: StringIntercom,
+    filename: StringIntercom,
+    frames: Intercom<i32>,
+    ready: Intercom<i8>,
+}
+impl SharedPV {
+    pub fn get_filename_template(&self) -> PathBuf {
+        let path: PathBuf = [
+            self.filepath.load(),
+            format!(
+                "{}_{{acquisition}}_{{module:02}}_{{index:06}}.h5",
+                self.filename.load()
+            ),
+        ]
+        .iter()
+        .collect();
+
+        path
+    }
+    pub fn set_ready(&mut self, ready: bool) {
+        self.ready.store(if ready { &1 } else { &0 });
+    }
+    pub fn get_frames(&self) -> u32 {
+        self.frames.load().max(0i32) as u32
+    }
+}
+
+fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
+    info!("Starting IOC with prefix: {prefix}");
+    let mut provider = IntercomProvider::new();
+    provider.rbv = true;
+    let pvs = SharedPV {
+        filepath: provider
+            .add_string_pv(&format!("{prefix}FilePath"), "", Some(128))
+            .unwrap(),
+        filename: provider
+            .add_string_pv(&format!("{prefix}FileName"), "", Some(128))
+            .unwrap(),
+        frames: provider
+            .add_pv(&format!("{prefix}NumCapture"), 0i32)
+            .unwrap(),
+        ready: provider.add_pv(&format!("{prefix}Ready"), 0i8).unwrap(),
+    };
+    let server = ServerBuilder::new(provider).start();
+    let listen = server.listen_to_events();
+    tokio::spawn(async move {
+        watch_lifecycle(listen, false, true).await;
+    });
+    (server, pvs)
 }
 
 fn main() {
@@ -116,10 +195,11 @@ fn main() {
         )
         .blue()
     );
-    // println!("{opts:?}");
+    let runtime = Runtime::new().unwrap();
+    let (server, pvs) = runtime.block_on(async { start_ca_server(&opts.pv_prefix) });
 
     // Make the shared communication object
-    let shared_state = SharedState::new(opts.listeners);
+    let shared_state = SharedState::new(opts.listeners, pvs);
 
     let mut threads = Vec::new();
     for port in start_port..(start_port + opts.listeners.get()) {
@@ -138,6 +218,12 @@ fn main() {
     for thread in threads {
         thread.join().unwrap();
     }
+
+    // Close down the PV server
+    runtime.block_on(async {
+        let _ = server.stop().await;
+    });
+
     info!("All threads terminated, closing.");
 }
 
