@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.47", features = ["derive", "env"] }
 tracing = "0.1.41"
-tracing-subscriber = "0.3.20"
+tracing-subscriber = { version = "=0.3.19", features=["local-time"] }
 epicars = { path = "./epicars" }
 tokio = { version = "1.47.1", features = ["full"] }
+colored = "3.0.0"
+time = { version = "0.3.43", features = ["formatting", "macros"] }
