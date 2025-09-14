@@ -16,6 +16,7 @@ use clap::Parser;
 use colored::Colorize;
 use epicars::providers::intercom::{Intercom, StringIntercom};
 use epicars::{ServerBuilder, ServerHandle, providers::IntercomProvider};
+use indicatif::ProgressBar;
 use morsgul::utils::{ball_spinner, watch_lifecycle};
 use serde::Deserialize;
 use time::macros::format_description;
@@ -315,6 +316,7 @@ fn main() {
     let mut bytes_written = 0usize;
     let mut spinner = ball_spinner();
     let mut last_update = Instant::now();
+    let mut progress: Option<ProgressBar> = None;
     // While all the threads run, we coordinate the shared data/state
     while !shared_state.cancelled.load(Ordering::Relaxed) {
         let (_port, status_update) = match state_rec.recv_timeout(Duration::from_millis(100)) {
@@ -322,10 +324,7 @@ fn main() {
             Err(RecvTimeoutError::Timeout) => (0, LifeCycleState::NoUpdate),
             Err(RecvTimeoutError::Disconnected) => break,
         };
-        // println!(
-        //     "State is {bulk_state:?}, got: {:?}",
-        //     (_port, &status_update)
-        // );
+
         match bulk_state {
             BulkStates::Ready => match status_update {
                 LifeCycleState::Started {
@@ -339,6 +338,9 @@ fn main() {
                         acquisition.to_string().bright_cyan(),
                         expected_frames.to_string().bright_cyan()
                     );
+                    progress = Some(ProgressBar::new(
+                        expected_frames as u64 * (opts.listeners.get() as u64),
+                    ));
                     info!(
                         "Writing to data files {}",
                         shared_state
@@ -357,12 +359,14 @@ fn main() {
                 LifeCycleState::Frame { size } => {
                     frames_seen += 1;
                     bytes_written += size;
+                    progress.as_ref().unwrap().inc(1);
                 }
                 LifeCycleState::Complete { .. } => {
                     count_complete += 1;
                     if count_complete == opts.listeners.get() {
                         bulk_state = BulkStates::Complete;
                         count_complete = 0;
+                        progress.as_ref().unwrap().finish_and_clear();
                     }
                 }
                 LifeCycleState::NoUpdate => (),
@@ -392,13 +396,15 @@ fn main() {
                 x => panic!("Unexpected status message when Starting: {x:?}"),
             },
         }
-        // println!("{:?}", Instant::now() - last_update);
-        if Instant::now() - last_update > Duration::from_millis(100) {
-            print!("      {}\r", spinner.next().unwrap());
-            let _ = std::io::stdout().flush();
-            last_update = Instant::now();
-        }
+        if let BulkStates::Ready = bulk_state {
+            if Instant::now() - last_update > Duration::from_millis(100) {
+                print!("      {}\r", spinner.next().unwrap());
+                let _ = std::io::stdout().flush();
+                last_update = Instant::now();
+            }
+        };
     }
+
     // Now, wait for all threads to finish...
     for thread in threads {
         thread.join().unwrap();
