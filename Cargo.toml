@@ -11,3 +11,7 @@ epicars = { path = "./epicars" }
 tokio = { version = "1.47.1", features = ["full"] }
 colored = "3.0.0"
 time = { version = "0.3.43", features = ["formatting", "macros"] }
+zmq = "0.10.0"
+serde = { version = "1.0.223", features = ["derive"] }
+serde_json = "1.0.145"
+strfmt = "0.2.5"
