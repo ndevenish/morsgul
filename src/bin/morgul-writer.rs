@@ -1,22 +1,24 @@
 use std::{
     collections::HashMap,
-    io::Write,
+    io::{self, Write},
     num::NonZeroU16,
     panic::{self, UnwindSafe},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Barrier,
         atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::{Result, bail};
 use clap::Parser;
 use colored::Colorize;
 use epicars::providers::intercom::{Intercom, StringIntercom};
 use epicars::{ServerBuilder, ServerHandle, providers::IntercomProvider};
+use hdf5_sys::h5p::H5P_DEFAULT;
 use indicatif::ProgressBar;
 use morsgul::utils::{ball_spinner, watch_lifecycle};
 use serde::Deserialize;
@@ -187,13 +189,13 @@ fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
     provider.rbv = true;
     let pvs = SharedPV {
         filepath: provider
-            .add_string_pv(&format!("{prefix}FilePath"), "", Some(128))
+            .add_string_pv(&format!("{prefix}FilePath"), "/dev/shm", Some(128))
             .unwrap(),
         filename: provider
-            .add_string_pv(&format!("{prefix}FileName"), "", Some(128))
+            .add_string_pv(&format!("{prefix}FileName"), "somewrite", Some(128))
             .unwrap(),
         frames: provider
-            .add_pv(&format!("{prefix}NumCapture"), 0i32)
+            .add_pv(&format!("{prefix}NumCapture"), 3600i32)
             .unwrap(),
         received_frames: provider
             .add_pv(&format!("{prefix}NumCaptured"), 0i32)
@@ -385,7 +387,9 @@ fn main() {
                     count_ready += 1;
                     if count_ready == opts.listeners.get() {
                         // Collection completely finished, do any global post here
-                        info!("Collection complete");
+                        info!(
+                            "Collection complete. {frames_seen} frames send in {bytes_written} bytes"
+                        );
                         bulk_state = BulkStates::Ready;
                     }
                 }
@@ -430,21 +434,61 @@ struct HDF5Writer {
     filename_template: PathBuf,
     header: Header,
     current_filename: Option<PathBuf>,
+    current_file: Option<hdf5::File>,
+    current_dataset: Option<hdf5_sys::h5i::hid_t>,
 }
+fn create_hdf5_file(filename: &Path, frames: usize, header: Header) -> Result<hdf5::File> {
+    let h5 = hdf5::File::create_excl(filename)?;
+    h5.new_dataset::<f32>()
+        .shape(())
+        .create("exptime")?
+        .write_scalar(&(header.exposure_length as f32 * 1e-9))?;
+    h5.new_dataset::<u8>()
+        .shape(())
+        .create("row")?
+        .write_scalar(&header.row)?;
+    h5.new_dataset::<u8>()
+        .shape(())
+        .create("column")?
+        .write_scalar(&header.column)?;
+    h5.new_dataset::<f32>()
+        .shape(())
+        .create("timestamp")?
+        .write_scalar(
+            &(SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("System time is before unix epoch!")
+                .as_secs_f32()),
+        )?;
+    h5.new_dataset_builder()
+        .chunk((1usize, header.shape.0 as usize, header.shape.1 as usize))
+        .add_filter(32008, &[0, 2])
+        .empty::<u16>()
+        .shape([frames, header.shape.0 as usize, header.shape.1 as usize])
+        .create("data")?;
+
+    Ok(h5)
+}
+
 impl HDF5Writer {
     fn new(filename_template: PathBuf, header: Header) -> Self {
+        assert!(!filename_template.as_os_str().is_empty());
         HDF5Writer {
             filename_template,
             header,
             current_filename: None,
+            current_file: None,
+            current_dataset: None,
         }
     }
-    fn write_frame(&mut self, index: usize, data: &[u8]) {
-        // self.filename_template.pa
+
+    fn write_frame(&mut self, index: usize, data: &[u8]) -> Result<()> {
+        // For when we want to roll over multiple files
+        let file_index = 0;
         let filename = self
             .filename_template
             .parent()
-            .unwrap()
+            .unwrap_or_else(|| Path::new("."))
             .join(PathBuf::from(format!(
                 "{}_{acquisition}_{module:02}_{index:06}.h5",
                 self.filename_template
@@ -453,10 +497,49 @@ impl HDF5Writer {
                     .unwrap_or(std::borrow::Cow::Borrowed("Unnamed")),
                 acquisition = self.header.acquisition,
                 module = self.header.get_module_index(),
-                index = 0
+                index = file_index
             )));
+        if Some(&filename) != self.current_filename.as_ref() {
+            // Close one if open already
+            self.close();
+            info!("Creating output file {}", filename.to_string_lossy());
+            let file = create_hdf5_file(filename.as_path(), 1000, self.header).unwrap();
+            self.current_filename = Some(filename);
+            self.current_dataset = Some(file.dataset("data")?.id());
+            self.current_file = Some(file);
+        }
+        // Do a direct chunk write to this file
+        if let Some(dataset_id) = self.current_dataset {
+            let chunk_offset = [0u64; 2];
+            unsafe {
+                let status = hdf5_sys::h5d::H5Dwrite_chunk(
+                    dataset_id,
+                    H5P_DEFAULT,
+                    0,
+                    chunk_offset.as_ptr(),
+                    data.len(),
+                    data.as_ptr() as *const _,
+                );
+                if status != 0 {
+                    bail!(hdf5::Error::query().unwrap());
+                }
+            }
+        }
+
+        Ok(())
     }
-    fn close(&mut self) {}
+    fn close(&mut self) {
+        if let Some(file) = self.current_file.take() {
+            let _ = file.close();
+        }
+        self.current_filename = None;
+        self.current_dataset = None;
+    }
+}
+impl Drop for HDF5Writer {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 #[tracing::instrument(name = "listener", skip(shared, connection_str, is_first))]
@@ -508,7 +591,9 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
         socket.set_rcvtimeo(2000).unwrap();
         // Start writing data, creating if necessary
         let mut writer = HDF5Writer::new(shared.pv.get_filename_template(), header);
-        writer.write_frame(header.frame_index as usize, &messages[1]);
+        writer
+            .write_frame(header.frame_index as usize, &messages[1])
+            .unwrap();
         let mut num_images = 1;
         // Get the rest of the images now
         while !shared.cancelled.load(Ordering::Relaxed) && num_images < expected_frames {
@@ -531,7 +616,9 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
             ));
             num_images += 1;
             let header: Header = serde_json::from_slice(messages.first().unwrap()).unwrap();
-            writer.write_frame(header.frame_index as usize, &messages[1]);
+            writer
+                .write_frame(header.frame_index as usize, &messages[1])
+                .unwrap();
         }
         // We have finished frames for this collection
         writer.close();
