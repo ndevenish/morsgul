@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     io::Write,
     num::NonZeroU16,
     panic::{self, UnwindSafe},
@@ -96,6 +97,11 @@ struct Header {
     acquisition: u32,
 }
 
+impl Header {
+    fn get_module_index(&self) -> u16 {
+        self.det_shape.0 * self.row as u16 + self.column as u16
+    }
+}
 #[derive(Clone, Debug)]
 struct SharedState {
     barrier: Arc<Barrier>,
@@ -148,10 +154,10 @@ impl SharedPV {
     pub fn get_filename_template(&self) -> PathBuf {
         let path: PathBuf = [
             self.filepath.load(),
-            format!(
-                "{}_{{acquisition}}_{{module:02}}_{{index:06}}.h5",
-                self.filename.load()
-            ),
+            self.filename.load(), // format!(
+                                  //     "{}_{{acquisition}}_{{module:02}}_{{index:06}}.h5",
+
+                                  // ),
         ]
         .iter()
         .collect();
@@ -421,15 +427,34 @@ fn main() {
 struct HDF5Writer {
     filename_template: PathBuf,
     header: Header,
+    current_filename: Option<PathBuf>,
 }
 impl HDF5Writer {
     fn new(filename_template: PathBuf, header: Header) -> Self {
         HDF5Writer {
             filename_template,
             header,
+            current_filename: None,
         }
     }
-    fn write_frame(&mut self, index: usize, data: &[u8]) {}
+    fn write_frame(&mut self, index: usize, data: &[u8]) {
+        // self.filename_template.pa
+        let filename = self
+            .filename_template
+            .parent()
+            .unwrap()
+            .join(PathBuf::from(format!(
+                "{}_{acquisition}_{module:02}_{index:06}.h5",
+                self.filename_template
+                    .file_name()
+                    .map(|v| v.to_string_lossy())
+                    .unwrap_or(std::borrow::Cow::Borrowed("Unnamed")),
+                acquisition = self.header.acquisition,
+                module = self.header.get_module_index(),
+                index = 0
+            )));
+    }
+    fn close(&mut self) {}
 }
 
 #[tracing::instrument(name = "listener", skip(shared, connection_str, is_first))]
@@ -507,6 +532,7 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
             writer.write_frame(header.frame_index as usize, &messages[1]);
         }
         // We have finished frames for this collection
+        writer.close();
         let _ = shared.state.send((
             port,
             LifeCycleState::Complete {
