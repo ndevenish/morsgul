@@ -149,6 +149,7 @@ struct SharedPV {
     frames: Intercom<i32>,
     received_frames: Intercom<i32>,
     ready: Intercom<i8>,
+    subfolder: Intercom<i8>,
 }
 impl SharedPV {
     pub fn get_filename_template(&self) -> PathBuf {
@@ -198,6 +199,7 @@ fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
             .add_pv(&format!("{prefix}NumCaptured"), 0i32)
             .unwrap(),
         ready: provider.add_pv(&format!("{prefix}Ready"), 0i8).unwrap(),
+        subfolder: provider.add_pv(&format!("{prefix}Subfolder"), 0i8).unwrap(),
     };
     let server = ServerBuilder::new(provider).start();
     let listen = server.listen_to_events();
