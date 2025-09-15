@@ -89,7 +89,7 @@ struct Header {
     row: u8,
     column: u8,
     shape: (u16, u16),
-    #[serde(rename = "detShape")]
+    #[serde(rename = "detShape", alias = "detshape")]
     det_shape: (u16, u16),
     bitmode: u8,
     #[serde(rename = "expLength")]
