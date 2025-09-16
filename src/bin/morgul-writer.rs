@@ -1,6 +1,5 @@
 use std::{
-    collections::HashMap,
-    io::{self, Write},
+    io::Write,
     num::NonZeroU16,
     panic::{self, UnwindSafe},
     path::{Path, PathBuf},
@@ -24,7 +23,7 @@ use morsgul::utils::{ball_spinner, watch_lifecycle};
 use serde::Deserialize;
 use time::macros::format_description;
 use tokio::runtime::Runtime;
-use tracing::{debug, info, level_filters::LevelFilter, warn};
+use tracing::{debug, error, info, level_filters::LevelFilter, warn};
 use tracing_subscriber::fmt::time::LocalTime;
 
 const DEFAULT_PREFIX: &str = "BL24I-JUNGFRAU:FD:";
@@ -388,7 +387,7 @@ fn main() {
                     if count_ready == opts.listeners.get() {
                         // Collection completely finished, do any global post here
                         info!(
-                            "Collection complete. {frames_seen} frames send in {bytes_written} bytes"
+                            "Collection complete. {frames_seen} frames sent in {bytes_written} bytes"
                         );
                         bulk_state = BulkStates::Ready;
                     }
@@ -435,7 +434,8 @@ struct HDF5Writer {
     header: Header,
     current_filename: Option<PathBuf>,
     current_file: Option<hdf5::File>,
-    current_dataset: Option<hdf5_sys::h5i::hid_t>,
+    current_dataset: Option<hdf5::Dataset>,
+    frames: usize,
 }
 fn create_hdf5_file(filename: &Path, frames: usize, header: Header) -> Result<hdf5::File> {
     let h5 = hdf5::File::create_excl(filename)?;
@@ -460,18 +460,20 @@ fn create_hdf5_file(filename: &Path, frames: usize, header: Header) -> Result<hd
                 .expect("System time is before unix epoch!")
                 .as_secs_f32()),
         )?;
-    h5.new_dataset_builder()
+    let ds = h5
+        .new_dataset_builder()
         .chunk((1usize, header.shape.0 as usize, header.shape.1 as usize))
         .add_filter(32008, &[0, 2])
         .empty::<u16>()
         .shape([frames, header.shape.0 as usize, header.shape.1 as usize])
         .create("data")?;
+    println!("Created dataset: {} ({:?})", ds.id(), ds.id_type());
 
     Ok(h5)
 }
 
 impl HDF5Writer {
-    fn new(filename_template: PathBuf, header: Header) -> Self {
+    fn new(filename_template: PathBuf, header: Header, frames: usize) -> Self {
         assert!(!filename_template.as_os_str().is_empty());
         HDF5Writer {
             filename_template,
@@ -479,6 +481,7 @@ impl HDF5Writer {
             current_filename: None,
             current_file: None,
             current_dataset: None,
+            frames,
         }
     }
 
@@ -503,24 +506,25 @@ impl HDF5Writer {
             // Close one if open already
             self.close();
             info!("Creating output file {}", filename.to_string_lossy());
-            let file = create_hdf5_file(filename.as_path(), 1000, self.header).unwrap();
+            let file = create_hdf5_file(filename.as_path(), self.frames, self.header).unwrap();
             self.current_filename = Some(filename);
-            self.current_dataset = Some(file.dataset("data")?.id());
+            self.current_dataset = Some(file.dataset("data")?);
             self.current_file = Some(file);
         }
         // Do a direct chunk write to this file
-        if let Some(dataset_id) = self.current_dataset {
-            let chunk_offset = [0u64; 2];
+        if let Some(ref dataset) = self.current_dataset {
+            let chunk_offset = [index as u64, 0u64, 0u64];
             unsafe {
                 let status = hdf5_sys::h5d::H5Dwrite_chunk(
-                    dataset_id,
+                    dataset.id(),
                     H5P_DEFAULT,
-                    0,
+                    0u32,
                     chunk_offset.as_ptr(),
                     data.len(),
                     data.as_ptr() as *const _,
                 );
                 if status != 0 {
+                    error!("Error writing chunk {chunk_offset:?}");
                     bail!(hdf5::Error::query().unwrap());
                 }
             }
@@ -567,7 +571,7 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
                 }
             }
         };
-        let expected_frames = shared.pv.get_frames();
+        let expected_frames = shared.pv.get_frames() as usize;
         assert_eq!(
             messages.len(),
             2,
@@ -579,7 +583,7 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
             port,
             LifeCycleState::Started {
                 acquisition: header.acquisition,
-                expected_frames: expected_frames as usize,
+                expected_frames,
             },
         ));
         let _ = shared.state.send((
@@ -590,7 +594,8 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
         ));
         socket.set_rcvtimeo(2000).unwrap();
         // Start writing data, creating if necessary
-        let mut writer = HDF5Writer::new(shared.pv.get_filename_template(), header);
+        let mut writer =
+            HDF5Writer::new(shared.pv.get_filename_template(), header, expected_frames);
         writer
             .write_frame(header.frame_index as usize, &messages[1])
             .unwrap();
@@ -625,7 +630,7 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is
         let _ = shared.state.send((
             port,
             LifeCycleState::Complete {
-                total_frames: num_images as usize,
+                total_frames: num_images,
             },
         ));
         shared.barrier.wait();
