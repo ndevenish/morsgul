@@ -188,7 +188,11 @@ fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
     provider.rbv = true;
     let pvs = SharedPV {
         filepath: provider
-            .add_string_pv(&format!("{prefix}FilePath"), "/dev/shm", Some(128))
+            .add_string_pv(
+                &format!("{prefix}FilePath"),
+                "/dls/i24/data/2025/cm40647-4/jungfrau/2025-09-16/test",
+                Some(128),
+            )
             .unwrap(),
         filename: provider
             .add_string_pv(&format!("{prefix}FileName"), "somewrite", Some(128))
@@ -467,7 +471,6 @@ fn create_hdf5_file(filename: &Path, frames: usize, header: Header) -> Result<hd
         .empty::<u16>()
         .shape([frames, header.shape.0 as usize, header.shape.1 as usize])
         .create("data")?;
-    println!("Created dataset: {} ({:?})", ds.id(), ds.id_type());
 
     Ok(h5)
 }
