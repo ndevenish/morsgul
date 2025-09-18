@@ -182,7 +182,7 @@ impl SharedPV {
     }
 }
 
-fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
+async fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
     info!("Starting IOC with prefix: {}", prefix.bold());
     let mut provider = IntercomProvider::new();
     provider.rbv = true;
@@ -206,7 +206,7 @@ fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
         ready: provider.add_pv(&format!("{prefix}Ready"), 0i8).unwrap(),
         subfolder: provider.add_pv(&format!("{prefix}Subfolder"), 0i8).unwrap(),
     };
-    let server = ServerBuilder::new(provider).start();
+    let server = ServerBuilder::new(provider).start().await.unwrap();
     let listen = server.listen_to_events();
     tokio::spawn(async move {
         watch_lifecycle(listen, false, true).await;
@@ -288,7 +288,7 @@ fn main() {
         .blue()
     );
     let runtime = Runtime::new().unwrap();
-    let (server, pvs) = runtime.block_on(async { start_ca_server(&opts.pv_prefix) });
+    let (server, pvs) = runtime.block_on(async { start_ca_server(&opts.pv_prefix).await });
 
     // Make the shared communication object
     let (sender, state_rec) = mpsc::channel();

@@ -56,7 +56,7 @@ async fn main() {
         .add_pv("BL24I-JUNGFRAU-META:FD:Ready", 0i8)
         .unwrap();
 
-    let mut server = ServerBuilder::new(provider).start();
+    let mut server = ServerBuilder::new(provider).start().await.unwrap();
 
     let listen = server.listen_to_events();
     let listener = tokio::spawn(async move {
