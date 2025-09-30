@@ -92,6 +92,7 @@ struct Header {
     shape: (u16, u16),
     #[serde(rename = "detShape", alias = "detshape")]
     det_shape: (u16, u16),
+
     bitmode: u8,
     #[serde(rename = "expLength")]
     exposure_length: usize,
@@ -311,7 +312,7 @@ fn main() {
         status_frames.push(threadstat.frames.clone());
         threads.push(thread::spawn(move || {
             listener_thread_safety_handler(token, || {
-                do_single_listener(this_thread_state, conn_str, port, port == start_port);
+                do_single_listener(this_thread_state, conn_str, port);
             });
         }));
     }
@@ -324,7 +325,7 @@ fn main() {
     }
 
     let mut bulk_state = BulkStates::Starting;
-    let mut expected_frames = 0usize;
+    let mut expected_frames;
     let mut count_ready = 0u16;
     let mut count_complete: u16 = 0u16;
     let mut frames_seen = 0usize;
@@ -413,12 +414,12 @@ fn main() {
                 x => panic!("Unexpected status message when Starting: {x:?}"),
             },
         }
-        if let BulkStates::Ready = bulk_state {
-            if Instant::now() - last_update > Duration::from_millis(100) {
-                print!("      {}\r", spinner.next().unwrap());
-                let _ = std::io::stdout().flush();
-                last_update = Instant::now();
-            }
+        if let BulkStates::Ready = bulk_state
+            && Instant::now() - last_update > Duration::from_millis(100)
+        {
+            print!("      {}\r", spinner.next().unwrap());
+            let _ = std::io::stdout().flush();
+            last_update = Instant::now();
         };
     }
 
@@ -466,8 +467,7 @@ fn create_hdf5_file(filename: &Path, frames: usize, header: Header) -> Result<hd
                 .expect("System time is before unix epoch!")
                 .as_secs_f32()),
         )?;
-    let ds = h5
-        .new_dataset_builder()
+    h5.new_dataset_builder()
         .chunk((1usize, header.shape.0 as usize, header.shape.1 as usize))
         .add_filter(32008, &[0, 2])
         .empty::<u16>()
@@ -551,8 +551,8 @@ impl Drop for HDF5Writer {
     }
 }
 
-#[tracing::instrument(name = "listener", skip(shared, connection_str, is_first))]
-fn do_single_listener(shared: SharedState, connection_str: String, port: u16, is_first: bool) {
+#[tracing::instrument(name = "listener", skip(shared, connection_str))]
+fn do_single_listener(shared: SharedState, connection_str: String, port: u16) {
     debug!("Starting port {port}");
     let context = zmq::Context::new();
     let socket = context.socket(zmq::PULL).unwrap();
