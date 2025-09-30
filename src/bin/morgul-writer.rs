@@ -15,7 +15,7 @@ use std::{
 use anyhow::{Result, bail};
 use clap::Parser;
 use colored::Colorize;
-use epicars::providers::intercom::{Intercom, StringIntercom};
+use epicars::providers::intercom::Intercom;
 use epicars::{ServerBuilder, ServerHandle, providers::IntercomProvider};
 use hdf5_sys::h5p::H5P_DEFAULT;
 use indicatif::ProgressBar;
@@ -145,8 +145,8 @@ impl ThreadState {
 /// Holds PV accessors for threads to get shared info from
 #[derive(Clone, Debug)]
 struct SharedPV {
-    filepath: StringIntercom,
-    filename: StringIntercom,
+    filepath: Intercom<String>,
+    filename: Intercom<String>,
     frames: Intercom<i32>,
     received_frames: Intercom<i32>,
     ready: Intercom<i8>,
@@ -170,7 +170,7 @@ impl SharedPV {
     pub fn set_ready(&mut self, ready: bool) {
         let val = if ready { 1 } else { 0 };
         if self.ready.load() != val {
-            self.ready.store(&val);
+            self.ready.store(val);
         }
     }
     pub fn get_frames(&self) -> u32 {
@@ -178,24 +178,26 @@ impl SharedPV {
     }
     pub fn set_received_frames(&mut self, frames: u32) {
         // self.frames.load().max(0i32) as u32
-        self.frames.store(&(frames.min(i32::MAX as u32) as i32));
+        self.frames.store(frames.min(i32::MAX as u32) as i32);
     }
 }
 
 async fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
     info!("Starting IOC with prefix: {}", prefix.bold());
     let mut provider = IntercomProvider::new();
-    provider.rbv = true;
     let pvs = SharedPV {
         filepath: provider
-            .add_string_pv(
+            .build_pv(
                 &format!("{prefix}FilePath"),
-                "/dls/i24/data/2025/cm40647-4/jungfrau/2025-09-16/test",
-                Some(128),
+                "/dls/i24/data/2025/cm40647-4/jungfrau/2025-09-16/test".to_string(),
             )
+            .minimum_length(128)
+            .build()
             .unwrap(),
         filename: provider
-            .add_string_pv(&format!("{prefix}FileName"), "somewrite", Some(128))
+            .build_pv(&format!("{prefix}FileName"), "somewrite".to_string())
+            .minimum_length(128)
+            .build()
             .unwrap(),
         frames: provider
             .add_pv(&format!("{prefix}NumCapture"), 3600i32)
