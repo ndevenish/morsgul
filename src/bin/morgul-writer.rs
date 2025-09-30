@@ -150,8 +150,8 @@ struct SharedPV {
     filename: Intercom<String>,
     frames: Intercom<i32>,
     received_frames: Intercom<i32>,
-    ready: Intercom<i8>,
-    subfolder: Intercom<i8>,
+    ready: Intercom<bool>,
+    subfolder: Intercom<bool>,
 }
 impl SharedPV {
     pub fn get_filename_template(&self) -> PathBuf {
@@ -169,9 +169,8 @@ impl SharedPV {
     }
     /// Set the ready state. Only writes to PV if changed.
     pub fn set_ready(&mut self, ready: bool) {
-        let val = if ready { 1 } else { 0 };
-        if self.ready.load() != val {
-            self.ready.store(val);
+        if self.ready.load() != ready {
+            self.ready.store(ready);
         }
     }
     pub fn get_frames(&self) -> u32 {
@@ -206,8 +205,10 @@ async fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
         received_frames: provider
             .add_pv(&format!("{prefix}NumCaptured"), 0i32)
             .unwrap(),
-        ready: provider.add_pv(&format!("{prefix}Ready"), 0i8).unwrap(),
-        subfolder: provider.add_pv(&format!("{prefix}Subfolder"), 0i8).unwrap(),
+        ready: provider.add_pv(&format!("{prefix}Ready"), false).unwrap(),
+        subfolder: provider
+            .add_pv(&format!("{prefix}Subfolder"), false)
+            .unwrap(),
     };
     let server = ServerBuilder::new(provider).start().await.unwrap();
     let listen = server.listen_to_events();
