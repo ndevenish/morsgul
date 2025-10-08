@@ -19,3 +19,13 @@ indicatif = "0.18.0"
 hdf5 = { package = "hdf5-metno", version = "0.10.0" }
 hdf5_sys = { package = "hdf5-metno-sys", version = "0.10.1" }
 anyhow = { version = "1.0.99", features = ["backtrace"] }
+bytemuck = { version = "1.24.0", features = ["derive"] }
+pnet = { version = "0.35.0", default-features = false, features = ["pnet_datalink", "std"] }
+rand = "0.9.2"
+core_affinity = "0.8.3"
+itertools = "0.14.0"
+thread-priority = "3.0.0"
+bus = "2.4.1"
+nix = { version = "0.30.1", features = ["socket", "uio"] }
+socket2 = { version = "0.6.0", features = ["all"] }
+libc = "0.2.176"
