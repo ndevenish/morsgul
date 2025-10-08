@@ -54,7 +54,6 @@ async fn main() {
         .unwrap();
     let _pv_count_captured = provider
         .build_pv("BL24I-JUNGFRAU-META:FD:NumCaptured", 0i32)
-        .read_only(true)
         .build()
         .unwrap();
     let _pv_subfolder = provider
@@ -64,7 +63,7 @@ async fn main() {
         .unwrap();
     let _pv_ready = provider
         .build_pv("BL24I-JUNGFRAU-META:FD:Ready", 0i8)
-        .read_only(true)
+        .rbv(true)
         .build()
         .unwrap();
 
@@ -201,6 +200,21 @@ async fn watch_lifecycle(mut recv: tokio::sync::broadcast::Receiver<ServerEvent>
                     .cloned()
                     .unwrap_or(format!("(Unknown {circuit_id}:{channel_id})"));
                 info!("{user_str} subscribed to {}", channel_name.bold());
+            }
+            ServerEvent::Unsubscribe {
+                circuit_id,
+                channel_id,
+            } => {
+                let user_str = &client_id
+                    .get(&circuit_id)
+                    .cloned()
+                    .unwrap_or_else(|| format!("(unknown user {}", circuit_id.to_string().green()));
+                let channel_name = channel_names
+                    .get(&circuit_id)
+                    .and_then(|m| m.get(&channel_id))
+                    .cloned()
+                    .unwrap_or(format!("(Unknown {circuit_id}:{channel_id})"));
+                info!("{user_str} unsubscribed from {}", channel_name.bold());
             }
         }
     }
