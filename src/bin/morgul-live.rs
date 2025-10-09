@@ -1,4 +1,5 @@
 use clap::Parser;
+use epicars::client::{Subscription, Watcher};
 use itertools::multizip;
 use morsgul::utils::{SlsDetectorHeader, SlsDetectorType, get_interface_addreses_with_prefix};
 use nix::errno::Errno;
@@ -7,7 +8,7 @@ use nix::sys::socket::{
 };
 
 use socket2::{Domain, Socket, Type};
-use std::io::IoSliceMut;
+use std::io::{self, IoSliceMut, Write};
 use std::iter;
 use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
@@ -75,9 +76,13 @@ struct AcquisitionStats {
 }
 
 /// For reporting ongoing progress/statistics to a central thread
+#[derive(Debug)]
 enum AcquisitionLifecycleState {
     /// An acquisition task is starting, along with the acquisition ID
-    Starting { acquisition_number: usize },
+    Starting {
+        acquisition_number: usize,
+        expected_images: usize,
+    },
     ImageReceived {
         image_number: usize,
         dropped_packets: usize,
@@ -115,10 +120,16 @@ impl<'a, 's, S> RecvMessageWrapper for RecvMsg<'a, 's, S> {
 struct Receiver {
     spare_buffers: Vec<Box<[u8]>>,
     state_reporter: Sender<(u16, AcquisitionLifecycleState)>,
+    expected_image_count: Watcher<i32>,
+    udp_port: u16,
 }
 
 impl Receiver {
-    fn start(port: u16, state_reporter: Sender<(u16, AcquisitionLifecycleState)>) -> ! {
+    fn start(
+        port: u16,
+        state_reporter: Sender<(u16, AcquisitionLifecycleState)>,
+        expected_images: Watcher<i32>,
+    ) -> ! {
         // Build the image data buffers we will use
         let spare_images: Vec<_> = std::iter::repeat_n((), THREAD_IMAGE_BUFFER_LENGTH)
             .map(|()| allocate_image_buffer())
@@ -127,6 +138,8 @@ impl Receiver {
         let mut recv = Receiver {
             spare_buffers: spare_images,
             state_reporter,
+            expected_image_count: expected_images,
+            udp_port: port,
         };
         recv.listen_port(port);
     }
@@ -134,6 +147,15 @@ impl Receiver {
     fn deliver_image(&mut self, image: ReceiveImage) {
         // for now, do nothing and just return the buffer to the pool
         self.spare_buffers.push(image.data);
+        self.state_reporter
+            .send((
+                self.udp_port,
+                AcquisitionLifecycleState::ImageReceived {
+                    image_number: image.frame_number as usize,
+                    dropped_packets: 64 - image.received_packets,
+                },
+            ))
+            .unwrap();
     }
 
     fn listen_port(&mut self, port: u16) -> ! {
@@ -163,7 +185,7 @@ impl Receiver {
             // previous image.
             let mut current_image: Option<ReceiveImage> = None;
             let mut previous_image: Option<ReceiveImage> = None;
-
+            let mut expected_images = 0usize;
             // Many images in one acquisition
             loop {
                 let msg = match recvmsg::<SockaddrStorage>(
@@ -191,6 +213,11 @@ impl Receiver {
                 // Is this the start of a new acquisition?
                 if is_first_image {
                     is_first_image = false;
+                    expected_images = self
+                        .expected_image_count
+                        .borrow()
+                        .expect("Tried to read expected images but not ready")
+                        as usize;
                     // Once we have started an acquisition, we want to expire it when the images stop
                     socket
                         .set_read_timeout(Some(Duration::from_millis(500)))
@@ -199,7 +226,10 @@ impl Receiver {
                     self.state_reporter
                         .send((
                             port,
-                            AcquisitionLifecycleState::Starting { acquisition_number },
+                            AcquisitionLifecycleState::Starting {
+                                acquisition_number,
+                                expected_images,
+                            },
                         ))
                         .unwrap();
                 }
@@ -275,6 +305,10 @@ impl Receiver {
                     // Push it back
                     current_image = Some(this_image);
                 }
+
+                if stats.complete_images == expected_images as usize {
+                    break;
+                }
             } // Acquisition loop
 
             // Handle any incomplete images
@@ -316,6 +350,13 @@ fn main() {
 
     let (state_tx, state_rx) = mpsc::channel::<(u16, AcquisitionLifecycleState)>();
 
+    // Start the CA receiver
+    // let client = epicars::Client::new().unw
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let client = runtime.block_on(epicars::Client::new()).unwrap();
+    let num_frames = client.watch::<i32>("BL24I-JUNGFRAU-META:FD:NumCapture");
+
+    // let client = tokio::task::spawn_blocking({ epicars::Client::new() });
     let mut threads = Vec::new();
 
     for (port, _address) in multizip((
@@ -326,6 +367,7 @@ fn main() {
     )) {
         let core = core_ids.next().unwrap();
         let stat = state_tx.clone();
+        let num_frames_inner = num_frames.clone();
         threads.push(thread::spawn(move || {
             if !core_affinity::set_for_current(core) {
                 println!("{port}: Failed to set affinity to core {}", core.id);
@@ -338,19 +380,38 @@ fn main() {
                 );
             };
 
-            Receiver::start(port, stat);
+            Receiver::start(port, stat, num_frames_inner);
         }));
     }
 
     let mut currently_active = 0usize;
     let mut high = 0usize;
     let mut start_time = Instant::now();
+    let mut last_update = Instant::now() - Duration::from_secs(100);
+    let mut num_images_seen = 0usize;
+    let mut total_expected_images = 0usize;
+    let mut acquisition_number = 0usize;
+    let mut packets_dropped = 0usize;
     loop {
         match state_rx.recv().unwrap() {
-            (_port, AcquisitionLifecycleState::Starting { acquisition_number }) => {
+            (
+                _port,
+                AcquisitionLifecycleState::Starting {
+                    acquisition_number: acq_number,
+                    expected_images,
+                },
+            ) => {
                 if currently_active == 0 {
-                    println!("Starting acquisition {}", acquisition_number);
+                    // The first image of the acquisition
+                    println!(
+                        "Starting acquisition {} with {} expected images",
+                        acquisition_number, expected_images
+                    );
                     start_time = Instant::now();
+                    num_images_seen = 0;
+                    total_expected_images = expected_images * num_listeners;
+                    acquisition_number = acq_number;
+                    packets_dropped = 0;
                 }
                 currently_active += 1;
                 high = std::cmp::max(currently_active, high);
@@ -360,13 +421,32 @@ fn main() {
                 if currently_active == 0 {
                     let elapsed = Instant::now() - start_time;
                     println!(
-                        "Acquisition finished in {:.2} s. {high} streams participated.",
-                        elapsed.as_secs(),
+                        "Acquisition finished in {:.2} s. {high} streams participated. {} packets dropped.",
+                        elapsed.as_secs_f32(),
+                        packets_dropped,
                     );
                     high = 0;
+                    ACQUISITION_NUMBER.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            _ => {}
+            (
+                _,
+                AcquisitionLifecycleState::ImageReceived {
+                    image_number: _,
+                    dropped_packets,
+                },
+            ) => {
+                num_images_seen += 1;
+                if (Instant::now() - last_update).as_millis() > 100 {
+                    last_update = Instant::now();
+                    print!(
+                        " {acquisition_number}: {:5.1} %\r",
+                        100.0f32 * (num_images_seen as f32 / total_expected_images as f32)
+                    );
+                    let _ = io::stdout().flush();
+                }
+                packets_dropped += dropped_packets;
+            }
         }
         // thread::sleep(Duration::from_secs(20));
     }
