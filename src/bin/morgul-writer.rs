@@ -189,14 +189,16 @@ async fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
         filepath: provider
             .build_pv(
                 &format!("{prefix}FilePath"),
-                "/dls/i24/data/2025/cm40647-4/jungfrau/2025-09-16/test".to_string(),
+                "/dls/i24/data/2025/cm40647-4/jungfrau/2025-10-11/test".to_string(),
             )
             .minimum_length(128)
+            .rbv(true)
             .build()
             .unwrap(),
         filename: provider
             .build_pv(&format!("{prefix}FileName"), "somewrite".to_string())
             .minimum_length(128)
+            .rbv(true)
             .build()
             .unwrap(),
         frames: provider
@@ -205,7 +207,11 @@ async fn start_ca_server(prefix: &str) -> (ServerHandle, SharedPV) {
         received_frames: provider
             .add_pv(&format!("{prefix}NumCaptured"), 0i32)
             .unwrap(),
-        ready: provider.add_pv(&format!("{prefix}Ready"), false).unwrap(),
+        ready: provider
+            .build_pv(&format!("{prefix}Ready"), false)
+            .rbv(true)
+            .build()
+            .unwrap(),
         subfolder: provider
             .add_pv(&format!("{prefix}Subfolder"), false)
             .unwrap(),
@@ -240,6 +246,7 @@ enum LifeCycleState {
         expected_frames: usize,
     },
     Frame {
+        index: usize,
         size: usize,
     },
     Complete {
@@ -373,7 +380,7 @@ fn main() {
             },
             BulkStates::Capturing => match status_update {
                 LifeCycleState::Started { .. } => (),
-                LifeCycleState::Frame { size } => {
+                LifeCycleState::Frame { index, size } => {
                     frames_seen += 1;
                     bytes_written += size;
                     progress.as_ref().unwrap().inc(1);
@@ -395,8 +402,9 @@ fn main() {
                     if count_ready == opts.listeners.get() {
                         // Collection completely finished, do any global post here
                         info!(
-                            "Collection complete. {frames_seen} frames sent in {bytes_written} bytes"
+                            "Collection complete. {frames_seen} frames written for {bytes_written} bytes"
                         );
+                        frames_seen = 0;
                         bulk_state = BulkStates::Ready;
                     }
                 }
@@ -446,6 +454,7 @@ struct HDF5Writer {
     frames: usize,
 }
 fn create_hdf5_file(filename: &Path, frames: usize, header: Header) -> Result<hdf5::File> {
+    let _ = std::fs::create_dir(filename.parent().unwrap());
     let h5 = hdf5::File::create_excl(filename)?;
     h5.new_dataset::<f32>()
         .shape(())
@@ -511,7 +520,7 @@ impl HDF5Writer {
         if Some(&filename) != self.current_filename.as_ref() {
             // Close one if open already
             self.close();
-            info!("Creating output file {}", filename.to_string_lossy());
+            debug!("Creating output file {}", filename.to_string_lossy());
             let file = create_hdf5_file(filename.as_path(), self.frames, self.header).unwrap();
             self.current_filename = Some(filename);
             self.current_dataset = Some(file.dataset("data")?);
@@ -595,6 +604,7 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16) {
         let _ = shared.state.send((
             port,
             LifeCycleState::Frame {
+                index: header.frame_index as usize,
                 size: messages[1].len(),
             },
         ));
@@ -619,14 +629,15 @@ fn do_single_listener(shared: SharedState, connection_str: String, port: u16) {
                 }
                 Err(x) => panic!("Unexpected ~MQ err: {x}"),
             };
+            num_images += 1;
+            let header: Header = serde_json::from_slice(messages.first().unwrap()).unwrap();
             let _ = shared.state.send((
                 port,
                 LifeCycleState::Frame {
+                    index: header.frame_index as usize,
                     size: messages[1].len(),
                 },
             ));
-            num_images += 1;
-            let header: Header = serde_json::from_slice(messages.first().unwrap()).unwrap();
             writer
                 .write_frame(header.frame_index as usize, &messages[1])
                 .unwrap();
