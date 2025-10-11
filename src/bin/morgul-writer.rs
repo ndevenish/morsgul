@@ -391,6 +391,7 @@ fn main() {
                         bulk_state = BulkStates::Complete;
                         count_complete = 0;
                         progress.as_ref().unwrap().finish_and_clear();
+                        frames_seen = 0;
                     }
                 }
                 LifeCycleState::NoUpdate => (),

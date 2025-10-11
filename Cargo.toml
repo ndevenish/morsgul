@@ -29,3 +29,4 @@ bus = "2.4.1"
 nix = { version = "0.30.1", features = ["socket", "uio"] }
 socket2 = { version = "0.6.0", features = ["all"] }
 libc = "0.2.176"
+cuda_std = "0.2.2"
